@@ -66,11 +66,38 @@ export const VideoGenerator: React.FC<VideoGeneratorProps> = ({
     }
   }, []);
 
+  // Stop all playing audio before starting video generation
+  const stopAllAudio = () => {
+    // Stop speech synthesis
+    if ('speechSynthesis' in window) {
+      speechSynthesis.cancel();
+    }
+    
+    // Stop all HTML audio elements
+    const audioElements = document.querySelectorAll('audio');
+    audioElements.forEach(audio => {
+      audio.pause();
+      audio.currentTime = 0;
+    });
+    
+    // Stop all video elements
+    const videoElements = document.querySelectorAll('video');
+    videoElements.forEach(video => {
+      video.pause();
+    });
+    
+    console.log('🔇 All audio/video stopped for video generation');
+  };
+
   const generateVideo = async () => {
     if (storySegments.length === 0) {
       toast.error('No story segments available for video generation');
       return;
     }
+
+    // Stop all playing audio/video before starting generation
+    stopAllAudio();
+    toast.success('🔇 Audio stopped - Starting video generation...');
 
     setIsGenerating(true);
     setGenerationStatus({
@@ -127,6 +154,17 @@ export const VideoGenerator: React.FC<VideoGeneratorProps> = ({
             audioSegments: audioData?.segments || []
           }
         };
+        
+        // Update generationStatus to show the video player immediately
+        setGenerationStatus({
+          id: result.id,
+          status: 'completed',
+          progress: 100,
+          provider: result.provider,
+          video_url: result.video_url,
+          thumbnail_url: result.thumbnail_url,
+          instructions: result.instructions
+        });
         
         onVideoGenerated(video);
         
@@ -186,31 +224,32 @@ export const VideoGenerator: React.FC<VideoGeneratorProps> = ({
         });
       }
       
-      setGenerationStatus({
-        id: 'tavus-enhanced',
-        status: 'completed',
-        progress: 100,
-        provider: 'tavus'
-      });
-      
-      toast.success(`🎭 Generated ${characterVideos.length} character videos with Tavus!`);
-      
-      return {
+      const enhancedVideo = {
         id: 'tavus-enhanced-' + Date.now(),
         video_url: characterVideos[0]?.video_url || '',
-        thumbnail_url: '',
+        thumbnail_url: undefined,
         provider: 'tavus',
         status: 'completed',
         created_at: new Date().toISOString(),
         metadata: {
-          hasNarration: true,
-          hasSubtitles: videoSettings.includeSubtitles,
-          style: 'conversational',
-          aspectRatio: videoSettings.aspectRatio,
-          characterVideos: characterVideos,
-          type: 'character_introduction'
+          characterVideos,
+          hasMultipleCharacters: characterVideos.length > 1,
+          characterCount: characterVideos.length
         }
       };
+
+      setGenerationStatus({
+        id: enhancedVideo.id,
+        status: 'completed',
+        progress: 100,
+        provider: 'tavus',
+        video_url: enhancedVideo.video_url,
+        thumbnail_url: undefined
+      });
+      
+      toast.success(`🎭 Generated ${characterVideos.length} character videos with Tavus!`);
+      
+      return enhancedVideo;
       
     } catch (error) {
       console.error('Tavus video generation failed:', error);
@@ -784,10 +823,21 @@ export const VideoGenerator: React.FC<VideoGeneratorProps> = ({
             )}
 
             {generationStatus?.status === 'completed' && generationStatus.video_url && (
-              <div className="space-y-4">
+              <div className="space-y-6 p-6 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded-lg">
+                <div className="text-center">
+                  <h4 className="text-lg font-semibold text-green-800 dark:text-green-200 mb-2">
+                    🎉 Your Video is Ready!
+                  </h4>
+                  <p className="text-green-600 dark:text-green-300 text-sm mb-4">
+                    Your AI-generated video is now available to watch and download
+                  </p>
+                </div>
+                
                 <video
                   controls
-                  className="w-full max-w-2xl mx-auto rounded-lg shadow-lg"
+                  autoPlay
+                  muted
+                  className="w-full max-w-3xl mx-auto rounded-lg shadow-xl border-2 border-green-200 dark:border-green-700"
                   poster={generationStatus.thumbnail_url || "https://images.pexels.com/photos/1261728/pexels-photo-1261728.jpeg?auto=compress&cs=tinysrgb&w=800"}
                 >
                   <source src={generationStatus.video_url} type="video/mp4" />
@@ -795,13 +845,31 @@ export const VideoGenerator: React.FC<VideoGeneratorProps> = ({
                 </video>
                 
                 <div className="flex justify-center space-x-3">
-                  <Button variant="outline" size="sm">
+                  <Button 
+                    variant="outline" 
+                    size="sm"
+                    onClick={() => {
+                      const video = document.querySelector('video');
+                      if (video) video.play();
+                    }}
+                  >
                     <Play className="w-4 h-4 mr-2" />
-                    Preview
+                    Play Again
                   </Button>
-                  <Button variant="outline" size="sm">
+                  <Button 
+                    variant="outline" 
+                    size="sm"
+                    onClick={() => {
+                      const link = document.createElement('a');
+                      link.href = generationStatus.video_url || '';
+                      link.download = 'animato-generated-video.mp4';
+                      document.body.appendChild(link);
+                      link.click();
+                      document.body.removeChild(link);
+                    }}
+                  >
                     <Download className="w-4 h-4 mr-2" />
-                    Download
+                    Download Video
                   </Button>
                   {generationStatus.instructions && (
                     <Button variant="outline" size="sm" onClick={() => setShowInstructions(!showInstructions)}>
@@ -811,11 +879,35 @@ export const VideoGenerator: React.FC<VideoGeneratorProps> = ({
                   )}
                 </div>
 
-                <div className="text-xs text-gray-500 space-y-1">
-                  <div>✅ Generated with {generationStatus.provider.toUpperCase()}</div>
-                  {videoSettings.includeNarration && <div>✅ AI narration included</div>}
-                  {videoSettings.includeSubtitles && <div>✅ Subtitles included</div>}
-                  <div>✅ {videoSettings.aspectRatio} aspect ratio</div>
+                <div className="bg-white dark:bg-green-800 p-4 rounded-lg">
+                  <div className="text-xs text-green-700 dark:text-green-300 space-y-1">
+                    <div className="flex items-center space-x-2">
+                      <CheckCircle className="w-4 h-4" />
+                      <span>Generated with {generationStatus.provider.toUpperCase()}</span>
+                    </div>
+                    {videoSettings.includeNarration && (
+                      <div className="flex items-center space-x-2">
+                        <CheckCircle className="w-4 h-4" />
+                        <span>AI narration included</span>
+                      </div>
+                    )}
+                    {videoSettings.includeSubtitles && (
+                      <div className="flex items-center space-x-2">
+                        <CheckCircle className="w-4 h-4" />
+                        <span>Subtitles included</span>
+                      </div>
+                    )}
+                    <div className="flex items-center space-x-2">
+                      <CheckCircle className="w-4 h-4" />
+                      <span>{videoSettings.aspectRatio} aspect ratio</span>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="text-center">
+                  <p className="text-green-600 dark:text-green-300 text-sm">
+                    💡 Your video is also saved in the "My Videos" section for future access
+                  </p>
                 </div>
               </div>
             )}

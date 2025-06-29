@@ -21,7 +21,13 @@ export class GeminiService {
     return configured;
   }
 
-  public async generateCharacterImage(characterDescription: string): Promise<string> {
+  public async generateCharacterImage(characterDescription: string, actualTraits?: {
+    gender?: string;
+    hairColor?: string;
+    eyeColor?: string;
+    ethnicity?: string;
+    age?: string;
+  }): Promise<string> {
     console.log('🎨 Gemini generateCharacterImage called with:', characterDescription);
     
     if (!this.isConfigured()) {
@@ -63,8 +69,8 @@ Format as a single, detailed prompt suitable for image generation AI.`;
       const imagePrompt = response.candidates[0].content.parts[0].text;
       console.log('🎯 Generated image prompt:', imagePrompt);
       
-      // Return a curated image URL based on the description
-      const imageUrl = this.getCuratedImageFromDescription(characterDescription, imagePrompt);
+      // Return a curated image URL based on the description and actual traits
+      const imageUrl = this.getCuratedImageFromDescription(characterDescription, imagePrompt, actualTraits);
       console.log('🖼️ Selected image URL:', imageUrl);
       
       return imageUrl;
@@ -251,51 +257,355 @@ Format as JSON array with objects containing "title", "description", and "prompt
     }
   }
 
-  private getCuratedImageFromDescription(description: string, enhancedPrompt: string): string {
-    console.log('🎨 Getting curated image for description:', description);
+  public validateImageMatch(imageUrl: string, description: string, expectedTraits: {
+    gender?: string;
+    hairColor?: string;
+    eyeColor?: string;
+    ethnicity?: string;
+    age?: string;
+  }): { isValid: boolean; mismatches: string[]; confidence: number } {
+    console.log('🔍 Validating image match for traits:', expectedTraits);
+    console.log('🖼️ Image URL being validated:', imageUrl);
     
-    // Enhanced character image selection based on Gemini's detailed prompt
-    const descLower = description.toLowerCase();
+    const mismatches: string[] = [];
+    const warnings: string[] = [];
     
-    // Character type detection with more specific matching
-    if (descLower.includes('elf') || descLower.includes('elven')) {
-      console.log('🧝 Detected elf character');
-      return 'https://images.pexels.com/photos/1858175/pexels-photo-1858175.jpeg?auto=compress&cs=tinysrgb&w=400&h=600&fit=crop';
-    } else if (descLower.includes('dwarf') || descLower.includes('dwarven')) {
-      console.log('🪓 Detected dwarf character');
-      return 'https://images.pexels.com/photos/1043471/pexels-photo-1043471.jpeg?auto=compress&cs=tinysrgb&w=400&h=600&fit=crop';
-    } else if (descLower.includes('wizard') || descLower.includes('mage') || descLower.includes('sorcerer')) {
-      console.log('🧙 Detected wizard character');
-      return 'https://images.pexels.com/photos/1222271/pexels-photo-1222271.jpeg?auto=compress&cs=tinysrgb&w=400&h=600&fit=crop';
-    } else if (descLower.includes('warrior') || descLower.includes('knight') || descLower.includes('fighter')) {
-      console.log('⚔️ Detected warrior character');
-      return 'https://images.pexels.com/photos/1040880/pexels-photo-1040880.jpeg?auto=compress&cs=tinysrgb&w=400&h=600&fit=crop';
-    } else if (descLower.includes('princess') || descLower.includes('queen') || descLower.includes('noble')) {
-      console.log('👑 Detected royal character');
-      return 'https://images.pexels.com/photos/1239291/pexels-photo-1239291.jpeg?auto=compress&cs=tinysrgb&w=400&h=600&fit=crop';
-    } else if (descLower.includes('commander') || descLower.includes('captain') || descLower.includes('officer')) {
-      console.log('👨‍✈️ Detected commander character');
-      return 'https://images.pexels.com/photos/1181690/pexels-photo-1181690.jpeg?auto=compress&cs=tinysrgb&w=400&h=600&fit=crop';
-    } else if (descLower.includes('scientist') || descLower.includes('doctor') || descLower.includes('researcher')) {
-      console.log('🔬 Detected scientist character');
-      return 'https://images.pexels.com/photos/1516680/pexels-photo-1516680.jpeg?auto=compress&cs=tinysrgb&w=400&h=600&fit=crop';
-    } else if (descLower.includes('young') && (descLower.includes('female') || descLower.includes('woman') || descLower.includes('girl'))) {
-      console.log('👩 Detected young female character');
-      return 'https://images.pexels.com/photos/1036623/pexels-photo-1036623.jpeg?auto=compress&cs=tinysrgb&w=400&h=600&fit=crop';
-    } else if (descLower.includes('young') && (descLower.includes('male') || descLower.includes('man') || descLower.includes('boy'))) {
-      console.log('👨 Detected young male character');
-      return 'https://images.pexels.com/photos/1181686/pexels-photo-1181686.jpeg?auto=compress&cs=tinysrgb&w=400&h=600&fit=crop';
-    } else if (descLower.includes('female') || descLower.includes('woman')) {
-      console.log('👩 Detected female character');
-      return 'https://images.pexels.com/photos/1130626/pexels-photo-1130626.jpeg?auto=compress&cs=tinysrgb&w=400&h=600&fit=crop';
-    } else if (descLower.includes('male') || descLower.includes('man')) {
-      console.log('👨 Detected male character');
-      return 'https://images.pexels.com/photos/1043471/pexels-photo-1043471.jpeg?auto=compress&cs=tinysrgb&w=400&h=600&fit=crop';
+    // Extract traits from image URL to match against expected traits
+    const imageTraits = this.extractTraitsFromImageUrl(imageUrl);
+    console.log('🔬 Extracted image traits:', imageTraits);
+    
+    let matchedTraits = 0;
+    let totalTraits = 0;
+    
+    // Check gender match
+    if (expectedTraits.gender) {
+      totalTraits++;
+      const expectedGender = expectedTraits.gender.toLowerCase();
+      const imageGender = imageTraits.gender?.toLowerCase() || '';
+      
+      if (imageGender && imageGender === expectedGender) {
+        matchedTraits++;
+        console.log(`✅ Gender match: ${expectedGender}`);
+      } else if (imageGender && imageGender !== expectedGender) {
+        mismatches.push(`Expected ${expectedTraits.gender} but image shows ${imageTraits.gender || 'unknown'}`);
+        console.log(`❌ Gender mismatch: expected ${expectedGender}, got ${imageGender}`);
+      } else {
+        // Fallback to description analysis for generic images
+        const descLower = description.toLowerCase();
+        const hasCorrectGender = descLower.includes(expectedGender) || 
+                                 (expectedGender === 'male' && (descLower.includes('man') || descLower.includes('boy'))) ||
+                                 (expectedGender === 'female' && (descLower.includes('woman') || descLower.includes('girl')));
+        
+        if (hasCorrectGender) {
+          matchedTraits += 0.7; // Partial credit for description match
+        } else {
+          mismatches.push(`Expected ${expectedTraits.gender} but image may not match`);
+        }
+      }
     }
     
-    // Default fallback
-    console.log('🎭 Using default character image');
-    return 'https://images.pexels.com/photos/1239291/pexels-photo-1239291.jpeg?auto=compress&cs=tinysrgb&w=400&h=600&fit=crop';
+    // Check ethnicity match
+    if (expectedTraits.ethnicity) {
+      totalTraits++;
+      const expectedEthnicity = expectedTraits.ethnicity.toLowerCase();
+      const imageEthnicity = imageTraits.ethnicity?.toLowerCase() || '';
+      
+      if (imageEthnicity && imageEthnicity === expectedEthnicity) {
+        matchedTraits++;
+        console.log(`✅ Ethnicity match: ${expectedEthnicity}`);
+      } else if (imageEthnicity && imageEthnicity !== expectedEthnicity) {
+        mismatches.push(`Expected ${expectedTraits.ethnicity} but image shows ${imageTraits.ethnicity || 'unknown'}`);
+        console.log(`❌ Ethnicity mismatch: expected ${expectedEthnicity}, got ${imageEthnicity}`);
+      } else {
+        // Partial credit if we can't determine from URL
+        matchedTraits += 0.5;
+        warnings.push(`Cannot verify ${expectedTraits.ethnicity} ethnicity from image`);
+      }
+    }
+    
+    // Check hair color match  
+    if (expectedTraits.hairColor) {
+      totalTraits++;
+      const expectedHair = expectedTraits.hairColor.toLowerCase();
+      const imageHair = imageTraits.hairColor?.toLowerCase() || '';
+      
+      if (imageHair && imageHair === expectedHair) {
+        matchedTraits++;
+        console.log(`✅ Hair color match: ${expectedHair}`);
+      } else if (imageHair && imageHair !== expectedHair) {
+        mismatches.push(`Expected ${expectedTraits.hairColor} hair but image shows ${imageTraits.hairColor || 'unknown'}`);
+        console.log(`❌ Hair color mismatch: expected ${expectedHair}, got ${imageHair}`);
+      } else {
+        // Can't determine from URL, give partial credit
+        matchedTraits += 0.4;
+        warnings.push(`Expected ${expectedTraits.hairColor} hair - verify visual match`);
+      }
+    }
+    
+    // Check eye color match (hardest to determine from URL, mostly warning)
+    if (expectedTraits.eyeColor) {
+      totalTraits++;
+      const expectedEyes = expectedTraits.eyeColor.toLowerCase();
+      // Eye color rarely determinable from URL, so give partial credit
+      matchedTraits += 0.5;
+      warnings.push(`Expected ${expectedTraits.eyeColor} eyes - verify visual match`);
+    }
+    
+    // Age is typically not determinable from URL patterns
+    if (expectedTraits.age) {
+      totalTraits++;
+      matchedTraits += 0.6; // Give benefit of doubt for age
+    }
+    
+    // Calculate confidence score based on actual trait matching
+    const confidence = totalTraits > 0 ? Math.max(0, Math.min(1, matchedTraits / totalTraits)) : 0;
+    
+    // Apply penalty for critical mismatches (gender, ethnicity)
+    const criticalMismatches = mismatches.filter(m => 
+      m.includes('gender') || m.includes('ethnicity') || 
+      m.includes('Expected male') || m.includes('Expected female') ||
+      m.includes('caucasian') || m.includes('asian') || m.includes('african') || m.includes('hispanic')
+    );
+    
+    const finalConfidence = criticalMismatches.length > 0 ? 
+      Math.min(confidence, 0.4) : // Cap at 40% for critical mismatches
+      confidence;
+    
+    const isValid = mismatches.length === 0 && finalConfidence > 0.7;
+    
+    console.log(`🎯 Image validation result: ${isValid ? 'VALID' : 'INVALID'} (confidence: ${(finalConfidence * 100).toFixed(1)}%)`);
+    if (mismatches.length > 0) console.log('❌ Mismatches:', mismatches);
+    if (warnings.length > 0) console.log('⚠️ Warnings:', warnings);
+    
+    return {
+      isValid,
+      mismatches: [...mismatches, ...warnings],
+      confidence: finalConfidence
+    };
+  }
+
+  private extractTraitsFromImageUrl(imageUrl: string): {
+    gender?: string;
+    ethnicity?: string;
+    hairColor?: string;
+  } {
+    // Extract traits from the structured image URL patterns we use
+    const traits: { gender?: string; ethnicity?: string; hairColor?: string } = {};
+    
+    // Try to match our image URL patterns
+    const urlPattern = /\/(male|female)-(caucasian|asian|african|hispanic|middle-eastern|mixed)-(black|brown|blonde|red|auburn|gray|white)/i;
+    const match = imageUrl.match(urlPattern);
+    
+    if (match) {
+      traits.gender = match[1];
+      traits.ethnicity = match[2];
+      traits.hairColor = match[3];
+    } else {
+      // Try to extract from URL or description context
+      if (imageUrl.includes('male')) traits.gender = 'male';
+      else if (imageUrl.includes('female')) traits.gender = 'female';
+      
+      if (imageUrl.includes('asian')) traits.ethnicity = 'asian';
+      else if (imageUrl.includes('african')) traits.ethnicity = 'african';
+      else if (imageUrl.includes('hispanic')) traits.ethnicity = 'hispanic';
+      else if (imageUrl.includes('caucasian')) traits.ethnicity = 'caucasian';
+      
+      if (imageUrl.includes('blonde')) traits.hairColor = 'blonde';
+      else if (imageUrl.includes('red')) traits.hairColor = 'red';
+      else if (imageUrl.includes('auburn')) traits.hairColor = 'auburn';
+      else if (imageUrl.includes('black')) traits.hairColor = 'black';
+    }
+    
+    return traits;
+  }
+
+  private getCuratedImageFromDescription(description: string, enhancedPrompt: string, actualTraits?: {
+    gender?: string;
+    hairColor?: string;
+    eyeColor?: string;
+    ethnicity?: string;
+    age?: string;
+  }): string {
+    console.log('🎨 Getting curated image for description:', description);
+    console.log('🎯 Actual traits provided:', actualTraits);
+    
+    // Use actual traits if provided, otherwise parse from description
+    const traits = actualTraits || this.parseCharacterTraits(description);
+    console.log('🔍 Final traits used:', traits);
+    
+    // Try to find best matching image based on all traits
+    const selectedImage = this.selectBestMatchingImage(traits, description);
+    
+    // Validate the selection
+    const validation = this.validateImageMatch(selectedImage, description, traits);
+    
+    if (!validation.isValid && validation.confidence < 0.4) {
+      console.log('⚠️ Low confidence match, might need regeneration');
+      // In the UI, this can trigger a "regenerate" option
+    }
+    
+    return selectedImage;
+  }
+
+  private parseCharacterTraits(description: string): {
+    gender?: string;
+    hairColor?: string;
+    eyeColor?: string;
+    ethnicity?: string;
+    age?: string;
+  } {
+    const descLower = description.toLowerCase();
+    const traits: any = {};
+    
+    // Gender detection
+    if (descLower.includes('male') || descLower.includes('man') || descLower.includes('boy')) {
+      traits.gender = 'male';
+    } else if (descLower.includes('female') || descLower.includes('woman') || descLower.includes('girl')) {
+      traits.gender = 'female';
+    }
+    
+    // Hair color detection
+    const hairColors = ['red', 'blonde', 'brown', 'black', 'gray', 'white', 'auburn', 'silver'];
+    for (const color of hairColors) {
+      if (descLower.includes(color + ' hair') || descLower.includes(color + '-haired')) {
+        traits.hairColor = color;
+        break;
+      }
+    }
+    
+    // Eye color detection
+    const eyeColors = ['blue', 'green', 'brown', 'hazel', 'gray', 'amber'];
+    for (const color of eyeColors) {
+      if (descLower.includes(color + ' eyes') || descLower.includes(color + '-eyed')) {
+        traits.eyeColor = color;
+        break;
+      }
+    }
+    
+    // Ethnicity detection
+    const ethnicities = ['african', 'asian', 'hispanic', 'caucasian', 'middle-eastern', 'latino', 'black', 'white'];
+    for (const ethnicity of ethnicities) {
+      if (descLower.includes(ethnicity)) {
+        traits.ethnicity = ethnicity;
+        break;
+      }
+    }
+    
+    // Age detection
+    if (descLower.includes('young')) {
+      traits.age = 'young';
+    } else if (descLower.includes('old') || descLower.includes('elder')) {
+      traits.age = 'older';
+    }
+    
+    return traits;
+  }
+
+  private selectBestMatchingImage(traits: any, description: string): string {
+    const descLower = description.toLowerCase();
+    
+    // Enhanced character image database with comprehensive trait matching
+    const characterImages = {
+      // Male Caucasian
+      'male-caucasian-brown': 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&h=600&q=80',
+      'male-caucasian-blonde': 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&h=600&q=80',
+      'male-caucasian-red': 'https://images.unsplash.com/photo-1595152452543-e5fc28ebc2b8?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&h=600&q=80',
+      'male-caucasian-auburn': 'https://images.unsplash.com/photo-1595152452543-e5fc28ebc2b8?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&h=600&q=80',
+      'male-caucasian-black': 'https://images.unsplash.com/photo-1566492031773-4f4e44671d66?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&h=600&q=80',
+      
+      // Male African/African American
+      'male-african-black': 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&h=600&q=80',
+      'male-african-brown': 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&h=600&q=80',
+      
+      // Male Asian
+      'male-asian-black': 'https://images.unsplash.com/photo-1582750433449-648ed127bb54?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&h=600&q=80',
+      'male-asian-brown': 'https://images.unsplash.com/photo-1531891437562-4301cf35b7e4?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&h=600&q=80',
+      'male-asian-auburn': 'https://images.unsplash.com/photo-1558618047-3c8c76ca7d13?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&h=600&q=80',
+      
+      // Male Hispanic/Latino
+      'male-hispanic-brown': 'https://images.unsplash.com/photo-1622253692010-333f2da6031d?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&h=600&q=80',
+      'male-hispanic-black': 'https://images.unsplash.com/photo-1612349317150-e413f6a5b16d?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&h=600&q=80',
+      
+      // Female Caucasian
+      'female-caucasian-blonde': 'https://images.unsplash.com/photo-1494790108755-2616b612b1e5?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&h=600&q=80',
+      'female-caucasian-brown': 'https://images.unsplash.com/photo-1507101105822-7472b28e22ac?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&h=600&q=80',
+      'female-caucasian-red': 'https://images.unsplash.com/photo-1521296797187-726205347ca9?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&h=600&q=80',
+      'female-caucasian-auburn': 'https://images.unsplash.com/photo-1521296797187-726205347ca9?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&h=600&q=80',
+      'female-caucasian-black': 'https://images.unsplash.com/photo-1502823403499-6ccfcf4fb453?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&h=600&q=80',
+      
+      // Female African/African American
+      'female-african-black': 'https://images.unsplash.com/photo-1531123897727-8f129e1688ce?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&h=600&q=80',
+      'female-african-brown': 'https://images.unsplash.com/photo-1588361035994-295e21daa761?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&h=600&q=80',
+      
+      // Female Asian
+      'female-asian-black': 'https://images.unsplash.com/photo-1488426862026-3ee34a7d66df?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&h=600&q=80',
+      'female-asian-brown': 'https://images.unsplash.com/photo-1601233749202-95d04d5b3c00?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&h=600&q=80',
+      'female-asian-auburn': 'https://images.unsplash.com/photo-1573497019940-1c28c88b4f3e?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&h=600&q=80',
+      
+      // Female Hispanic/Latino
+      'female-hispanic-brown': 'https://images.unsplash.com/photo-1615109398623-88346a601842?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&h=600&q=80',
+      'female-hispanic-black': 'https://images.unsplash.com/photo-1580489944761-15a19d654956?ixlib=rb-4.0.3&auto=format&fit=crop&w=400&h=600&q=80',
+    };
+    
+    // Build composite key for best matching image using parsed traits
+    const genderKey = traits.gender || 'male';
+    const ethnicityKey = traits.ethnicity || 'caucasian';
+    const hairKey = traits.hairColor || 'brown';
+    
+    console.log(`🔍 Selecting image for traits: gender=${genderKey}, ethnicity=${ethnicityKey}, hair=${hairKey}`);
+    
+    // Try exact match first
+    const exactKey = `${genderKey}-${ethnicityKey}-${hairKey}`;
+    console.log(`🎯 Trying exact match key: ${exactKey}`);
+    
+    if (characterImages[exactKey as keyof typeof characterImages]) {
+      const selectedUrl = characterImages[exactKey as keyof typeof characterImages];
+      console.log(`✅ Exact match found: ${exactKey} -> ${selectedUrl}`);
+      return selectedUrl;
+    }
+    
+    // Try fallback with same gender and ethnicity, different hair colors (prioritized order)
+    const prioritizedHairColors = ['brown', 'black', 'auburn', 'red', 'blonde'];
+    for (const fallbackHair of prioritizedHairColors) {
+      if (fallbackHair === hairKey) continue; // Skip the one we already tried
+      
+      const fallbackKey = `${genderKey}-${ethnicityKey}-${fallbackHair}`;
+      if (characterImages[fallbackKey as keyof typeof characterImages]) {
+        const selectedUrl = characterImages[fallbackKey as keyof typeof characterImages];
+        console.log(`🔄 Hair color fallback: ${fallbackKey} -> ${selectedUrl}`);
+        return selectedUrl;
+      }
+    }
+    
+    // Try fallback with same gender, different ethnicities (keeping original hair if possible)
+    const prioritizedEthnicities = [ethnicityKey, 'caucasian', 'asian', 'african', 'hispanic'].filter((v, i, a) => a.indexOf(v) === i);
+    for (const fallbackEthnicity of prioritizedEthnicities) {
+      if (fallbackEthnicity === ethnicityKey) continue; // Skip original which we already tried
+      
+      // Try with original hair color first
+      const fallbackKey = `${genderKey}-${fallbackEthnicity}-${hairKey}`;
+      if (characterImages[fallbackKey as keyof typeof characterImages]) {
+        const selectedUrl = characterImages[fallbackKey as keyof typeof characterImages];
+        console.log(`🔄 Ethnicity fallback (same hair): ${fallbackKey} -> ${selectedUrl}`);
+        return selectedUrl;
+      }
+      
+      // Then try with common hair colors
+      for (const commonHair of ['brown', 'black']) {
+        const commonKey = `${genderKey}-${fallbackEthnicity}-${commonHair}`;
+        if (characterImages[commonKey as keyof typeof characterImages]) {
+          const selectedUrl = characterImages[commonKey as keyof typeof characterImages];
+          console.log(`🔄 Ethnicity + hair fallback: ${commonKey} -> ${selectedUrl}`);
+          return selectedUrl;
+        }
+      }
+    }
+    
+    // Ultimate fallback - guaranteed to exist
+    const ultimateFallback = genderKey === 'male' ? 'male-caucasian-brown' : 'female-caucasian-blonde';
+    const fallbackUrl = characterImages[ultimateFallback as keyof typeof characterImages];
+    console.log(`⚠️ Ultimate fallback: ${ultimateFallback} -> ${fallbackUrl}`);
+    return fallbackUrl;
   }
 
   private async makeAPIRequest(endpoint: string, body: any): Promise<any> {

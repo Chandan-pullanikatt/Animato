@@ -55,17 +55,15 @@ export class TavusService {
 
   public async createVideoAgent(character: any): Promise<TavusVideoAgent> {
     if (!this.isConfigured()) {
-      // Return demo agent for non-configured environments
       return this.getDemoVideoAgent(character);
     }
 
     try {
       console.log('🎭 Creating Tavus replica for character:', character.name);
-      
-      // First, try to get existing replicas
+
       const existingReplicas = await this.listReplicas();
       const existingReplica = existingReplicas.find(r => r.replica_name === character.name);
-      
+
       if (existingReplica) {
         console.log('✅ Using existing Tavus replica:', existingReplica.replica_id);
         return {
@@ -76,18 +74,21 @@ export class TavusService {
         };
       }
 
-      // Create new replica for this character
+      const replicaPayload = {
+        replica_name: character.name,
+        train_video_url: character.photo_url || character.image_url || 'https://samplelib.com/lib/preview/mp4/sample-5s.mp4',
+        callback_url: 'https://example.com/tavus-callback'
+      };
+
+      console.log('📤 Tavus replica request payload:', replicaPayload);
+
       const response = await fetch(`${this.baseURL}/replicas`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'x-api-key': this.apiKey!,
         },
-        body: JSON.stringify({
-          replica_name: character.name,
-          train_video_url: character.photo_url || character.image_url || null,
-          callback_url: null
-        }),
+        body: JSON.stringify(replicaPayload),
       });
 
       if (!response.ok) {
@@ -98,48 +99,52 @@ export class TavusService {
 
       const data = await response.json();
       console.log('✅ Tavus replica created:', data);
-      
+
+      const replicaId = data.replica_id;
+      await this.waitForReplicaReady(replicaId);
+
       return {
-        id: data.replica_id,
+        id: replicaId,
         name: character.name,
-        replica_id: data.replica_id,
+        replica_id: replicaId,
         status: 'active'
       };
-    } catch (error) {
-      console.error('❌ Tavus video agent creation failed:', error);
+    } catch (error: any) {
+      console.log('ℹ️ Tavus video agent unavailable, using demo mode:', error.message);
       return this.getDemoVideoAgent(character);
     }
   }
 
-  public async generateConversationalVideo(
-    request: TavusConversationRequest
-  ): Promise<TavusConversationResponse> {
+  public async generateConversationalVideo(request: TavusConversationRequest): Promise<TavusConversationResponse> {
     if (!this.isConfigured()) {
+      return this.getDemoConversationalVideo(request);
+    }
+
+    if (!request.replica_id) {
+      console.error('❌ No replica_id provided for video generation');
       return this.getDemoConversationalVideo(request);
     }
 
     try {
       console.log('🎬 Generating Tavus video with replica:', request.replica_id);
-      
+
+      const payload = {
+        replica_id: request.replica_id,
+        script: {
+          type: 'text',
+          input: request.message
+        }
+      };
+
+      console.log('📤 Tavus video request payload:', payload);
+
       const response = await fetch(`${this.baseURL}/videos`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'x-api-key': this.apiKey!,
         },
-        body: JSON.stringify({
-          replica_id: request.replica_id,
-          script: request.message,
-          background: request.background || '#000000',
-          properties: {
-            voice_settings: {
-              stability: 0.75,
-              similarity_boost: 0.8,
-              style: 0.0,
-              use_speaker_boost: true
-            }
-          }
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
@@ -150,7 +155,7 @@ export class TavusService {
 
       const data = await response.json();
       console.log('✅ Tavus video generated:', data);
-      
+
       return {
         id: data.video_id,
         video_url: data.download_url || data.hosted_url,
@@ -159,10 +164,47 @@ export class TavusService {
         duration: data.duration || 30,
         replica_id: request.replica_id
       };
-    } catch (error) {
-      console.error('❌ Tavus conversational video failed:', error);
+    } catch (error: any) {
+      console.log('ℹ️ Tavus conversational video unavailable, using demo mode:', error.message);
       return this.getDemoConversationalVideo(request);
     }
+  }
+
+  private async waitForReplicaReady(replicaId: string, maxWaitTime: number = 30000): Promise<void> {
+    const startTime = Date.now();
+    const pollInterval = 2000;
+
+    console.log('⏳ Waiting for replica to be ready:', replicaId);
+
+    while (Date.now() - startTime < maxWaitTime) {
+      try {
+        const response = await fetch(`${this.baseURL}/replicas/${replicaId}`, {
+          headers: {
+            'x-api-key': this.apiKey!,
+          },
+        });
+
+        if (response.ok) {
+          const replica = await response.json();
+          console.log('🔍 Replica status:', replica.status);
+
+          if (replica.status === 'ready') {
+            console.log('✅ Replica is ready!');
+            return;
+          } else if (replica.status === 'error') {
+            console.error('❌ Replica creation failed with error status');
+            throw new Error(`Replica ${replicaId} is in error state: ${replica.error_message || 'Unknown error'}`);
+          }
+        }
+
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
+      } catch (error) {
+        console.error('❌ Error checking replica status:', error);
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
+      }
+    }
+
+    console.log('⚠️ Replica may not be ready yet, but proceeding anyway...');
   }
 
   private async listReplicas(): Promise<any[]> {
@@ -192,15 +234,15 @@ export class TavusService {
       name: character.name,
       replica_id: `demo-replica-${character.name.toLowerCase()}`,
       status: 'active',
-      video_url: 'https://sample-videos.com/zip/10/mp4/SampleVideo_1280x720_1mb.mp4'
+      video_url: 'https://samplelib.com/lib/preview/mp4/sample-5s.mp4'
     };
   }
 
   private getDemoConversationalVideo(request: TavusConversationRequest): TavusConversationResponse {
     return {
       id: `demo-conv-${Date.now()}`,
-      video_url: 'https://sample-videos.com/zip/10/mp4/SampleVideo_1280x720_1mb.mp4',
-      audio_url: 'https://sample-videos.com/zip/10/mp3/SampleAudio_0.4mb.mp3',
+      video_url: 'https://samplelib.com/lib/preview/mp4/sample-5s.mp4',
+      audio_url: 'https://samplelib.com/lib/preview/mp3/sample-9s.mp3',
       transcript: request.message,
       duration: 5,
       replica_id: request.replica_id
@@ -217,7 +259,7 @@ export class TavusService {
           status: 'active'
         },
         {
-          id: 'demo-agent-2', 
+          id: 'demo-agent-2',
           name: 'Character Creator',
           replica_id: 'demo-replica-2',
           status: 'active'
@@ -240,4 +282,4 @@ export class TavusService {
   }
 }
 
-export const tavusService = TavusService.getInstance(); 
+export const tavusService = TavusService.getInstance();

@@ -1,5 +1,11 @@
 import { geminiService } from './geminiService';
 
+interface ImageValidationResult {
+  isValid: boolean;
+  mismatches: string[];
+  confidence: number;
+}
+
 interface CharacterGenerationRequest {
   name: string;
   description: string;
@@ -24,12 +30,18 @@ interface CharacterPhoto {
   provider: string;
   style: string;
   prompt: string;
+  validation?: ImageValidationResult;
+  needsRegeneration?: boolean;
+  isAccepted?: boolean; // Whether image meets confidence threshold
 }
 
 export class CharacterService {
   private static instance: CharacterService;
   private replicateToken: string | null = null;
   private huggingFaceToken: string | null = null;
+  
+  // Confidence threshold for accepting character images
+  private static readonly MIN_CONFIDENCE_THRESHOLD = 0.7; // 70%
 
   private constructor() {
     this.replicateToken = (import.meta as any).env?.VITE_REPLICATE_API_TOKEN || null;
@@ -48,27 +60,46 @@ export class CharacterService {
     try {
       console.log('🎨 Generating high-quality AI character photo for:', request.name);
       
-      // Try multiple AI providers in order of quality
+      const results: CharacterPhoto[] = [];
+      let lastError: any = null;
+      
+      // Try multiple AI providers in order of quality with validation
       
       // 1. Try Replicate SDXL (best quality)
       if (this.replicateToken) {
         try {
           const replicatePhoto = await this.generateWithReplicate(request);
-          console.log(`✅ Generated high-quality photo with Replicate for ${request.name}`);
-          return [replicatePhoto];
+          const validatedPhoto = await this.validateAndEnhancePhoto(replicatePhoto, request);
+          
+          if (this.meetsConfidenceThreshold(validatedPhoto)) {
+            console.log(`✅ Generated high-quality photo with Replicate for ${request.name}`);
+            return [validatedPhoto];
+          } else {
+            console.log('⚠️ Replicate photo below confidence threshold, trying next provider');
+            results.push(validatedPhoto);
+          }
         } catch (error) {
           console.error('❌ Replicate failed, trying HuggingFace:', error);
+          lastError = error;
         }
       }
 
-      // 2. Try HuggingFace Stable Diffusion
+      // 2. Try HuggingFace Stable Diffusion  
       if (this.huggingFaceToken) {
         try {
           const huggingFacePhoto = await this.generateWithHuggingFace(request);
-          console.log(`✅ Generated photo with HuggingFace for ${request.name}`);
-          return [huggingFacePhoto];
+          const validatedPhoto = await this.validateAndEnhancePhoto(huggingFacePhoto, request);
+          
+          if (this.meetsConfidenceThreshold(validatedPhoto)) {
+            console.log(`✅ Generated photo with HuggingFace for ${request.name}`);
+            return [validatedPhoto];
+          } else {
+            console.log('⚠️ HuggingFace photo below confidence threshold, trying next provider');
+            results.push(validatedPhoto);
+          }
         } catch (error) {
           console.error('❌ HuggingFace failed, trying Gemini:', error);
+          lastError = error;
         }
       }
 
@@ -76,22 +107,121 @@ export class CharacterService {
       if (geminiService.isConfigured()) {
         try {
           const geminiPhoto = await this.generateWithGemini(request);
-          console.log(`✅ Generated photo with Gemini AI for ${request.name}`);
-          return [geminiPhoto];
+          const validatedPhoto = await this.validateAndEnhancePhoto(geminiPhoto, request);
+          
+          if (this.meetsConfidenceThreshold(validatedPhoto)) {
+            console.log(`✅ Generated photo with Gemini AI for ${request.name}`);
+            return [validatedPhoto];
+          } else {
+            console.log('⚠️ Gemini photo below confidence threshold, using fallback');
+            results.push(validatedPhoto);
+          }
         } catch (error) {
           console.error('❌ Gemini failed, using AI-designed fallback:', error);
+          lastError = error;
         }
       }
 
-      // 4. Use AI-designed character portraits (not stock photos)
+      // 4. Use AI-designed character portraits (curated images)
       const aiDesignedPhoto = this.getAIDesignedCharacterPhoto(request);
-      console.log(`✅ Using AI-designed character portrait for ${request.name}`);
-      return [aiDesignedPhoto];
+      const validatedFallback = await this.validateAndEnhancePhoto(aiDesignedPhoto, request);
+      
+      // Check if fallback meets threshold
+      if (this.meetsConfidenceThreshold(validatedFallback)) {
+        console.log(`✅ Using AI-designed character portrait for ${request.name}`);
+        return [validatedFallback];
+      } else {
+        // All providers failed to meet threshold - return invalid result
+        console.log('❌ All images below confidence threshold - returning invalid result');
+        validatedFallback.needsRegeneration = true;
+        validatedFallback.isAccepted = false;
+        return [validatedFallback];
+      }
       
     } catch (error) {
       console.error('❌ Character photo generation error:', error);
-      return [this.getAIDesignedCharacterPhoto(request)];
+      const fallbackPhoto = this.getAIDesignedCharacterPhoto(request);
+      fallbackPhoto.needsRegeneration = true;
+      return [fallbackPhoto];
     }
+  }
+
+  private async validateAndEnhancePhoto(photo: CharacterPhoto, request: CharacterGenerationRequest): Promise<CharacterPhoto> {
+    try {
+      // Create validation traits from request
+      const expectedTraits = {
+        gender: request.appearance.gender,
+        hairColor: request.appearance.hairColor,
+        eyeColor: request.appearance.eyeColor,
+        ethnicity: request.appearance.ethnicity,
+        age: request.appearance.age
+      };
+
+      // Validate image match using Gemini service
+      const validation = geminiService.validateImageMatch(
+        photo.url,
+        request.description,
+        expectedTraits
+      );
+
+      // Check if photo meets confidence threshold
+      const meetsThreshold = validation.confidence >= CharacterService.MIN_CONFIDENCE_THRESHOLD;
+      
+      // Add validation results to photo
+      const enhancedPhoto = {
+        ...photo,
+        validation,
+        needsRegeneration: !meetsThreshold,
+        isAccepted: meetsThreshold
+      };
+
+      console.log(`🔍 Photo validation for ${request.name}: ${validation.isValid ? 'VALID' : 'INVALID'} (${(validation.confidence * 100).toFixed(1)}% confidence) - ${meetsThreshold ? 'ACCEPTED' : 'REJECTED'}`);
+      
+      return enhancedPhoto;
+    } catch (error) {
+      console.error('❌ Photo validation error:', error);
+      return {
+        ...photo,
+        validation: { isValid: false, mismatches: ['Validation failed'], confidence: 0 },
+        needsRegeneration: true,
+        isAccepted: false
+      };
+    }
+  }
+
+  private meetsConfidenceThreshold(photo: CharacterPhoto): boolean {
+    const confidence = photo.validation?.confidence ?? 0;
+    const meetsThreshold = confidence >= CharacterService.MIN_CONFIDENCE_THRESHOLD;
+    
+    console.log(`📊 Confidence check: ${(confidence * 100).toFixed(1)}% ${meetsThreshold ? '≥' : '<'} ${(CharacterService.MIN_CONFIDENCE_THRESHOLD * 100).toFixed(0)}% threshold - ${meetsThreshold ? 'PASS' : 'FAIL'}`);
+    
+    return meetsThreshold;
+  }
+
+  public async retryCharacterPhoto(request: CharacterGenerationRequest, avoidProviders: string[] = []): Promise<CharacterPhoto[]> {
+    console.log('🔄 Retrying character photo generation with avoided providers:', avoidProviders);
+    
+    // Temporarily disable avoided providers and retry
+    const originalReplicate = this.replicateToken;
+    const originalHuggingFace = this.huggingFaceToken;
+    
+    if (avoidProviders.includes('replicate')) this.replicateToken = null;
+    if (avoidProviders.includes('huggingface')) this.huggingFaceToken = null;
+    
+    try {
+      const result = await this.generateCharacterPhotos(request);
+      return result;
+    } finally {
+      // Restore original tokens
+      this.replicateToken = originalReplicate;
+      this.huggingFaceToken = originalHuggingFace;
+    }
+  }
+
+  public checkImageMatch(imageUrl: string, expectedTraits: any): ImageValidationResult {
+    // This could be enhanced with actual computer vision APIs
+    // For now, we use heuristic matching
+    return geminiService.validateImageMatch(imageUrl, '', expectedTraits);
   }
 
   private async generateWithReplicate(request: CharacterGenerationRequest): Promise<CharacterPhoto> {
@@ -206,7 +336,18 @@ export class CharacterService {
       console.log('🤖 Using Gemini AI for character image generation...');
       
       const prompt = this.buildProfessionalCharacterPrompt(request);
-      const imageUrl = await geminiService.generateCharacterImage(prompt);
+      
+      // Pass actual character traits to ensure accurate image selection
+      const actualTraits = {
+        gender: request.appearance.gender,
+        hairColor: request.appearance.hairColor,
+        eyeColor: request.appearance.eyeColor,
+        ethnicity: request.appearance.ethnicity,
+        age: request.appearance.age
+      };
+      
+      console.log('🎯 Passing actual traits to Gemini:', actualTraits);
+      const imageUrl = await geminiService.generateCharacterImage(prompt, actualTraits);
       
       return {
         url: imageUrl,
@@ -329,10 +470,10 @@ export class CharacterService {
   }
 
   private createCharacterSeed(name: string, appearance: any): number {
-    const nameHash = name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    const nameHash = name.split('').reduce((acc: number, char: string) => acc + char.charCodeAt(0), 0);
     const genderHash = appearance.gender.charCodeAt(0);
-    const ethnicityHash = appearance.ethnicity.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-    const hairHash = appearance.hairColor.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    const ethnicityHash = appearance.ethnicity.split('').reduce((acc: number, char: string) => acc + char.charCodeAt(0), 0);
+    const hairHash = appearance.hairColor.split('').reduce((acc: number, char: string) => acc + char.charCodeAt(0), 0);
     
     return Math.abs(nameHash + genderHash + ethnicityHash + hairHash) % 1000;
   }

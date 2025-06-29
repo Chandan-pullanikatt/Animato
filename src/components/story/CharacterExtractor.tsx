@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Users, Sparkles, Edit3, Check, X, Plus, Camera, RefreshCw, AlertCircle, Zap } from 'lucide-react';
+import { Users, Sparkles, Edit3, Check, X, Plus, Camera, RefreshCw, AlertCircle, Zap, AlertTriangle } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Card, CardContent, CardHeader } from '../ui/Card';
 import { Input } from '../ui/Input';
@@ -28,6 +28,13 @@ interface Character {
     provider: string;
     style: string;
     isSelected?: boolean;
+    validation?: {
+      isValid: boolean;
+      mismatches: string[];
+      confidence: number;
+    };
+    needsRegeneration?: boolean;
+    isAccepted?: boolean;
   }>;
 }
 
@@ -35,6 +42,9 @@ interface CharacterExtractorProps {
   story: string;
   onCharactersExtracted: (characters: Character[]) => void;
 }
+
+// Minimum confidence threshold for accepting character images (must match characterService.ts)
+const MIN_CONFIDENCE_THRESHOLD = 70; // 70%
 
 export const CharacterExtractor: React.FC<CharacterExtractorProps> = ({
   story,
@@ -163,7 +173,15 @@ export const CharacterExtractor: React.FC<CharacterExtractorProps> = ({
       `${name} serves as a catalyst for important plot developments and character growth.`,
       `${name} represents key themes in the story through their personal struggles and triumphs.`
     ];
-    return descriptions[Math.floor(Math.random() * descriptions.length)];
+    
+    // Create deterministic seed from character name
+    const seed = name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    const seededRandom = () => {
+      const x = Math.sin(seed) * 10000;
+      return x - Math.floor(x);
+    };
+    
+    return descriptions[Math.floor(seededRandom() * descriptions.length)];
   };
 
   const generatePersonalityTraits = (name: string, story: string): string[] => {
@@ -173,7 +191,23 @@ export const CharacterExtractor: React.FC<CharacterExtractorProps> = ({
       'cautious', 'optimistic', 'analytical', 'empathetic', 'independent', 'curious'
     ];
     
-    return allTraits.sort(() => 0.5 - Math.random()).slice(0, 4);
+    // Create deterministic seed from character name
+    const seed = name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    const seededRandom = (index: number) => {
+      const x = Math.sin(seed + index) * 10000;
+      return x - Math.floor(x);
+    };
+    
+    // Use seeded random to select 4 consistent traits
+    const selectedTraits: string[] = [];
+    const shuffledTraits = [...allTraits];
+    
+    for (let i = 0; i < 4; i++) {
+      const randomIndex = Math.floor(seededRandom(i + 10) * shuffledTraits.length);
+      selectedTraits.push(shuffledTraits.splice(randomIndex, 1)[0]);
+    }
+    
+    return selectedTraits;
   };
 
   const generateAppearance = (name: string, story: string) => {
@@ -186,13 +220,20 @@ export const CharacterExtractor: React.FC<CharacterExtractorProps> = ({
       styles: ['casual', 'professional', 'artistic', 'athletic', 'elegant', 'bohemian']
     };
 
+    // Create deterministic seed from character name to ensure consistent traits
+    const seed = name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    const seededRandom = (index: number) => {
+      const x = Math.sin(seed + index) * 10000;
+      return x - Math.floor(x);
+    };
+
     return {
-      age: appearances.ages[Math.floor(Math.random() * appearances.ages.length)],
-      gender: appearances.genders[Math.floor(Math.random() * appearances.genders.length)],
-      ethnicity: appearances.ethnicities[Math.floor(Math.random() * appearances.ethnicities.length)],
-      hairColor: appearances.hairColors[Math.floor(Math.random() * appearances.hairColors.length)],
-      eyeColor: appearances.eyeColors[Math.floor(Math.random() * appearances.eyeColors.length)],
-      style: appearances.styles[Math.floor(Math.random() * appearances.styles.length)]
+      age: appearances.ages[Math.floor(seededRandom(1) * appearances.ages.length)],
+      gender: appearances.genders[Math.floor(seededRandom(2) * appearances.genders.length)],
+      ethnicity: appearances.ethnicities[Math.floor(seededRandom(3) * appearances.ethnicities.length)],
+      hairColor: appearances.hairColors[Math.floor(seededRandom(4) * appearances.hairColors.length)],
+      eyeColor: appearances.eyeColors[Math.floor(seededRandom(5) * appearances.eyeColors.length)],
+      style: appearances.styles[Math.floor(seededRandom(6) * appearances.styles.length)]
     };
   };
 
@@ -288,14 +329,76 @@ export const CharacterExtractor: React.FC<CharacterExtractorProps> = ({
       setCharacters(updatedCharacters);
       onCharactersExtracted(updatedCharacters);
       
+      // Check validation results and provide feedback based on acceptance threshold
       if (photos.length > 0) {
-        toast.success(`Generated ${photos.length} photos for ${character.name}`);
+        const firstPhoto = photos[0];
+        const confidence = firstPhoto?.validation?.confidence ?? 0;
+        const confidencePercentage = (confidence * 100).toFixed(0);
+        const isAccepted = firstPhoto?.isAccepted ?? false;
+        
+        if (!isAccepted) {
+          // Photo rejected due to low confidence - show less aggressive message
+          toast(`📸 Generated photo for ${character.name} (${confidencePercentage}% match). Click "Regenerate" for different style.`, 
+            { duration: 4000, icon: '📸' }
+          );
+        } else {
+          // Photo accepted
+          toast.success(`✅ Generated ${photos.length} photo${photos.length > 1 ? 's' : ''} for ${character.name} (${confidencePercentage}% match)`);
+        }
       } else {
         toast.error(`Failed to generate photos for ${character.name}`);
       }
     } catch (error: any) {
       console.error('Photo generation error:', error);
       toast.error(`Failed to generate photos for ${character.name}: ${error.message}`);
+    } finally {
+      setIsGeneratingPhotos(null);
+    }
+  };
+
+  const regenerateCharacterPhoto = async (characterId: string) => {
+    const character = characters.find(c => c.id === characterId);
+    if (!character) return;
+
+    setIsGeneratingPhotos(characterId);
+    
+    try {
+      console.log('🔄 Regenerating photos for:', character.name);
+      
+      // Try different providers or enhanced prompts
+      const currentProvider = character.photos[0]?.provider || '';
+      const avoidProviders = currentProvider ? [currentProvider] : [];
+      
+      const photos = await characterService.retryCharacterPhoto({
+        name: character.name,
+        description: character.description,
+        appearance: character.appearance,
+        style: 'realistic'
+      }, avoidProviders);
+
+      const updatedCharacters = characters.map(char =>
+        char.id === characterId 
+          ? { ...char, photos: photos.map((photo, index) => ({ ...photo, isSelected: index === 0 })) }
+          : char
+      );
+      
+      setCharacters(updatedCharacters);
+      onCharactersExtracted(updatedCharacters);
+      
+      // Check acceptance status of regenerated photo
+      const firstPhoto = photos[0];
+      const confidence = firstPhoto?.validation?.confidence ?? 0;
+      const confidencePercentage = (confidence * 100).toFixed(0);
+      const isAccepted = firstPhoto?.isAccepted ?? false;
+      
+      if (isAccepted) {
+        toast.success(`✅ Regenerated accepted photo for ${character.name}! (${confidencePercentage}% match ≥ ${MIN_CONFIDENCE_THRESHOLD}%)`);
+      } else {
+        toast.error(`❌ Regenerated photo still below ${MIN_CONFIDENCE_THRESHOLD}% threshold (${confidencePercentage}% match). Try regenerating again or adjust character description.`);
+      }
+    } catch (error: any) {
+      console.error('Photo regeneration error:', error);
+      toast.error(`Failed to regenerate photos for ${character.name}: ${error.message}`);
     } finally {
       setIsGeneratingPhotos(null);
     }
@@ -519,21 +622,62 @@ export const CharacterExtractor: React.FC<CharacterExtractorProps> = ({
                       <label className="text-sm font-medium text-gray-700 dark:text-gray-300">
                         Character Photos
                       </label>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => generateCharacterPhotos(character.id)}
-                        disabled={isGeneratingPhotos === character.id || isGeneratingAllPhotos}
-                        isLoading={isGeneratingPhotos === character.id}
-                      >
-                        {isGeneratingPhotos === character.id ? (
-                          <RefreshCw className="w-3 h-3 mr-1 animate-spin" />
-                        ) : (
-                          <Camera className="w-3 h-3 mr-1" />
+                      <div className="flex space-x-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => generateCharacterPhotos(character.id)}
+                          disabled={isGeneratingPhotos === character.id || isGeneratingAllPhotos}
+                          isLoading={isGeneratingPhotos === character.id}
+                        >
+                          {isGeneratingPhotos === character.id ? (
+                            <RefreshCw className="w-3 h-3 mr-1 animate-spin" />
+                          ) : (
+                            <Camera className="w-3 h-3 mr-1" />
+                          )}
+                          Generate
+                        </Button>
+                        
+                        {/* Regenerate button - show if photo exists but not accepted */}
+                        {character.photos.length > 0 && (
+                          character.photos.some(photo => !photo.isAccepted || photo.needsRegeneration)
+                        ) && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => regenerateCharacterPhoto(character.id)}
+                            disabled={isGeneratingPhotos === character.id || isGeneratingAllPhotos}
+                            className="text-red-600 border-red-300 hover:bg-red-50"
+                          >
+                            <RefreshCw className="w-3 h-3 mr-1" />
+                            Regenerate
+                          </Button>
                         )}
-                        Generate
-                      </Button>
+                      </div>
                     </div>
+
+                    {/* Validation feedback - show acceptance status */}
+                    {character.photos.length > 0 && character.photos[0]?.validation && (
+                      <div className={`mb-2 p-2 rounded-md text-xs ${
+                        character.photos[0].isAccepted
+                          ? 'bg-green-50 text-green-700 border border-green-200'
+                          : 'bg-red-50 text-red-700 border border-red-200'
+                      }`}>
+                        <div className="flex items-center space-x-1">
+                          {character.photos[0].isAccepted ? (
+                            <Check className="w-3 h-3 text-green-500" />
+                          ) : (
+                            <Camera className="w-3 h-3 text-blue-500" />
+                          )}
+                          <span className="font-medium">
+                            {character.photos[0].isAccepted 
+                              ? 'Photo Ready' 
+                              : 'Click Regenerate for different style'
+                            }
+                          </span>
+                        </div>
+                      </div>
+                    )}
                     
                     {character.photos.length > 0 ? (
                       <div className="grid grid-cols-2 gap-2">
@@ -543,7 +687,9 @@ export const CharacterExtractor: React.FC<CharacterExtractorProps> = ({
                             className={`relative aspect-square rounded-lg overflow-hidden cursor-pointer border-2 transition-all ${
                               photo.isSelected 
                                 ? 'border-primary-500 ring-2 ring-primary-200' 
-                                : 'border-gray-200 hover:border-primary-300'
+                                : photo.isAccepted 
+                                  ? 'border-green-200 hover:border-green-300' 
+                                  : 'border-blue-200 hover:border-blue-300 opacity-90'
                             }`}
                             onClick={() => selectCharacterPhoto(character.id, photoIndex)}
                           >
@@ -556,14 +702,25 @@ export const CharacterExtractor: React.FC<CharacterExtractorProps> = ({
                                 e.currentTarget.src = `https://images.pexels.com/photos/1239291/pexels-photo-1239291.jpeg?auto=compress&cs=tinysrgb&w=200&h=200&fit=crop`;
                               }}
                             />
+                            {/* Selection indicator */}
                             {photo.isSelected && (
                               <div className="absolute top-1 right-1 w-5 h-5 bg-primary-500 rounded-full flex items-center justify-center">
                                 <Check className="w-3 h-3 text-white" />
                               </div>
                             )}
+                            
+                            {/* Simple acceptance indicator */}
+                            {photo.validation && photo.isAccepted && (
+                              <div className="absolute top-1 left-1 w-5 h-5 bg-green-500 rounded-full flex items-center justify-center">
+                                <Check className="w-2 h-2 text-white" />
+                              </div>
+                            )}
+                            
                             <div className="absolute bottom-1 left-1 text-xs bg-black bg-opacity-50 text-white px-1 rounded">
                               {photo.provider}
                             </div>
+                            
+
                           </div>
                         ))}
                       </div>
@@ -576,6 +733,7 @@ export const CharacterExtractor: React.FC<CharacterExtractorProps> = ({
                              isGeneratingAllPhotos ? 'In queue...' : 
                              'Click Generate to create photos'}
                           </p>
+
                         </div>
                       </div>
                     )}
